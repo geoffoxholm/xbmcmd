@@ -74,6 +74,20 @@ class XBMCMD(cmd.Cmd):
         """Auto-complete function for the `detail` command"""
         return self.get_movie_names(*args)
 
+    def get_id(self, line):
+        if line in self.movies:
+            return self.movies[line]
+        try:
+            if int(line) in self.movies.values():
+                return int(line)
+            else:
+                return None
+        except ValueError:
+            candidates = [movie for movie in self.movies.keys() if movie.lower().startswith(line.lower())]
+            if len(candidates) >= 1:
+                return self.movies[candidates[0]]
+            else:
+                return None
 
     #
     # -- Commands ----
@@ -94,37 +108,28 @@ class XBMCMD(cmd.Cmd):
 
     def do_detail(self, line):
         """Outputs detail about a given movie. Pass the ID of the movie or (a prefix of) its title."""
-        if line in self.movies:
-            return self.do_detail(self.movies[line])
-        else:
-            try:
-                if int(line) in self.movies.values():
-                    movie_id = int(line)
-                    result = self.send_request("detail", [movie_id])
-                    details = result["result"]["moviedetails"]
+        movie_id = self.get_id(line)
+        if movie_id is None:
+            print("You must pass a valid movie_id or a (prefix of a) movie title")
+            return
+        result = self.send_request("detail", [movie_id])
+        details = result["result"]["moviedetails"]
+        tokens = {'ID': 'movieid',
+                  'Path'  : 'file',
+                  'Trailer': 'trailer',
+                  'iMDB' : 'imdbnumber',
+                  'Added' : 'dateadded'}
+        prefix = " " * (1 + max([len(key) for key in tokens.keys()]))
+        print(prefix, "%s (%d)" % (details["label"], details["year"]))
+        print(prefix, "=" * (7 + len(details["label"])))
+        formats = {'iMDB' : "http://www.imdb.com/title/%s"}
+        line_format = "%%%ds: %%s" % max(map(len, tokens.keys()))
+        for label, key in tokens.items():
+            value = details[key] if label not in formats else formats[label] % details[key]
+            print(line_format % (label, value))
 
-                    tokens = {'ID': 'movieid',
-                              'Title' : 'label',
-                              'Path'  : 'file',
-                              'Trailer': 'trailer',
-                              'iMDB' : 'imdbnumber',
-                              'Added' : 'dateadded'}
-                    formats = {'iMDB' : "http://www.imdb.com/title/%s"}
-                    line_format = "%%%ds: %%s" % max(map(len, tokens.keys()))
-                    for label, key in tokens.items():
-                        value = details[key] if label not in formats else formats[label] % details[key]
-                        print(line_format % (label, value))
-
-                    for video in details["streamdetails"]["video"]:
-                        print(line_format % ("Ratio", "%sx%s" % (video["width"], video["height"])))
-                else:
-                    print("Bad movie ID")
-            except ValueError:
-                candidates = [movie for movie in self.movies.keys() if movie.lower().startswith(line.lower())]
-                if len(candidates) >= 1:
-                    return self.do_detail(candidates[0])
-                else:
-                    print("You must pass a valid movie name (or prefix) or movie_id")
+        for video in details["streamdetails"]["video"]:
+            print(line_format % ("Ratio", "%sx%s" % (video["width"], video["height"])))
 
 
 if __name__ == '__main__':

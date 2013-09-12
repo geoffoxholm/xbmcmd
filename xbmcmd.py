@@ -3,6 +3,8 @@ import json
 from urllib.request import urlopen, Request
 import sys
 
+HOST = "localhost"
+PORT = "8080"
 
 class XBMCMD(cmd.Cmd):
     HEADERS = {'content-type' : 'application/json'}
@@ -15,27 +17,15 @@ class XBMCMD(cmd.Cmd):
     intro  = "Type `?` or `help` for command list"
 
 
-    def __init__(self, *args, URL = "http://localhost:8080/jsonrpc"):
+    def __init__(self, *args, URL = "http://%s:%s/jsonrpc" % (HOST, PORT)):
+        """Constructor, optional argument is the jsonrpc URL"""
         self.URL = URL
         result = self.send_request("movies")
         self.movies = {movie["label"] : movie["movieid"] for movie in result["result"]["movies"]}
-        #self.movies = [movie["label"] for movie in result["result"]["movies"]]
-
         super().__init__()
 
-    def make_request(self, method, params = None, debug = False):
-        """ Prepares an XBMC json request """
-        data = {"method"  : method,
-                "jsonrpc" : "2.0",
-                "id"      : "XBMCMD"}
-        if params is not None:
-            data["params"] = params
-        if debug:
-            print(json.dumps(data))
-
-        return Request(self.URL, headers = XBMCMD.HEADERS, data = json.dumps(data).encode('utf-8'))
-
     def send_request(self, command, args = []):
+        """Packages the command, and args into a JSON request for XBMC"""
         params = None
         if command in XBMCMD.PARAMS.keys():
             params = {}
@@ -60,7 +50,13 @@ class XBMCMD(cmd.Cmd):
             else:
                 params = dict(list(params.items()) + list(XBMCMD.HARD_PARAMS[command].items()))
 
-        request = self.make_request(XBMCMD.COMMANDS[command], params)
+        data = {"method"  : XBMCMD.COMMANDS[command],
+                "jsonrpc" : "2.0",
+                "id"      : "XBMCMD"}
+        if params is not None:
+            data["params"] = params
+
+        request = Request(self.URL, headers = XBMCMD.HEADERS, data = json.dumps(data).encode('utf-8'))
         handler = urlopen(request)
         return json.loads(handler.read().decode("utf-8"))
 
@@ -69,11 +65,13 @@ class XBMCMD(cmd.Cmd):
     #
 
     def get_movie_names(self, text, line, begin, end):
+        """Returns a list of movie name completions"""
         prefix = line.partition(' ')[2].lower()
         offset = len(prefix) - len(text)
         return [s[offset:] for s in self.movies.keys() if s.lower().startswith(prefix)]
 
     def complete_detail(self, *args):
+        """Auto-complete function for the `detail` command"""
         return self.get_movie_names(*args)
 
 
@@ -85,8 +83,7 @@ class XBMCMD(cmd.Cmd):
         """Quits"""
         print()
         return True
-    do_EOF = do_quit
-
+    do_EOF = do_quit # Enable Ctrl-d
 
 
     def do_movies(self, line):
@@ -96,6 +93,7 @@ class XBMCMD(cmd.Cmd):
             print("%5d: %s (%s)" % (movie["movieid"], movie["label"], movie["year"]))
 
     def do_detail(self, line):
+        """Outputs detail about a given movie. Pass the ID of the movie or (a prefix of) its title."""
         if line in self.movies:
             return self.do_detail(self.movies[line])
         else:
@@ -111,12 +109,14 @@ class XBMCMD(cmd.Cmd):
                               'Trailer': 'trailer',
                               'iMDB' : 'imdbnumber',
                               'Added' : 'dateadded'}
-                    format = "%%%ds: %%s" % max(map(len, tokens.keys()))
+                    formats = {'iMDB' : "http://www.imdb.com/title/%s"}
+                    line_format = "%%%ds: %%s" % max(map(len, tokens.keys()))
                     for label, key in tokens.items():
-                        print(format % (label, details[key]))
+                        value = details[key] if label not in formats else formats[label] % details[key]
+                        print(line_format % (label, value))
 
                     for video in details["streamdetails"]["video"]:
-                        print(format % ("Ratio", "%sx%s" % (video["width"], video["height"])))
+                        print(line_format % ("Ratio", "%sx%s" % (video["width"], video["height"])))
                 else:
                     print("Bad movie ID")
             except ValueError:

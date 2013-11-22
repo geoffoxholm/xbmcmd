@@ -3,6 +3,8 @@ import json
 from urllib.request import urlopen, Request
 import sys
 import logging as log
+from collections import namedtuple
+
 
 HOST = "localhost"
 PORT = "8080"
@@ -10,19 +12,28 @@ VERBOSE = True
 
 verbose_print = None
 
+Movie = namedtuple("Movie", ["title", "id", "year"])
+
 class XBMCMD(cmd.Cmd):
     HEADERS = {'content-type' : 'application/json'}
     COMMANDS = {"movies" : "VideoLibrary.GetMovies",
                 "detail": "VideoLibrary.GetMovieDetails",
                 "scan"  : "VideoLibrary.Scan",
+                "scanPath"  : "VideoLibrary.Scan",
                 "clean" : "VideoLibrary.Clean",
+                "remove": "VideoLibrary.RemoveMovie",
                 "terminate"  : "Application.Quit",
                 "play" : "Player.Open",
                 "stop" : "Player.Stop",
-                "pause" : "Player.PlayPause"}
+                "pause" : "Player.PlayPause",
+                "setTrailer" : "VideoLibrary.SetMovieDetails"}
 
     PARAMS = {"detail"  : {"movieid" : int},
-              "play" : {"item" : {"movieid" : int}}}
+              "play" : {"item" : {"movieid" : int}},
+              "remove" : {"movieid" : int},
+              "setTrailer": {"movieid" : int, "trailer" : str},
+              "scanPath" : {"directory" : str}}
+
     HARD_PARAMS   = {"movies"   : {"properties" : ["year"]},
                      "detail" : {"properties" : ["trailer", "year", "streamdetails", "file", "imdbnumber", "dateadded"] },
                      "stop" : {"playerid" : 1},
@@ -42,7 +53,7 @@ class XBMCMD(cmd.Cmd):
         if self._movies is None:
             log.info("Querying list of movies")
             result = self.send_request("movies")
-            self._movies =  {movie["label"] : movie["movieid"] for movie in result["result"]["movies"]}
+            self._movies =  {"%s (%d)" % (movie["label"], movie["year"]) : Movie(movie["label"], movie["movieid"], movie["year"]) for movie in result["result"]["movies"]}
         return self._movies
 
     def send_request(self, command, args = []):
@@ -97,6 +108,10 @@ class XBMCMD(cmd.Cmd):
         """Auto-complete function for the `detail` command"""
         return self.get_movie_names(*args)
 
+    def complete_setTrailer(self, *args):
+        """Auto-complete function for the `setTrailer` command"""
+        return self.get_movie_names(*args)
+
     def get_id(self, line):
         try:
             if int(line):
@@ -106,9 +121,22 @@ class XBMCMD(cmd.Cmd):
         except ValueError:
             candidates = [movie for movie in self.movies.keys() if movie.lower().startswith(line.lower())]
             if len(candidates) >= 1:
-                return self.movies[candidates[0]]
+                return self.movies[candidates[0]].id
             else:
                 return None
+
+
+    def parse_line(self, line):
+        """Returns movie_id, rest - where rest is everything after the movie ID or full title (year)"""
+        try:
+            tokens = line.split(" ")
+            return int(tokens[0]), " ".join(tokens[1:])
+        except:
+            pass
+        for title in self.movies.keys():
+            if line.startswith(title):
+                return self.movies[title].id, line[len(title)+1:]
+        return self.get_id(line), None
 
     @staticmethod
     def check_result(result):
@@ -144,7 +172,10 @@ class XBMCMD(cmd.Cmd):
 
     def do_scan(self, line):
         """Initiates a scan of your library (in the background)"""
-        XBMCMD.check_result(self.send_request("scan"))
+        if line == "":
+            XBMCMD.check_result(self.send_request("scan"))
+        else:
+            XBMCMD.check_result(self.send_request("scanPath", [line]))
 
     def do_clean(self, line):
         """Initiates a clean of your library (in the background). May take a long time to complete."""
@@ -171,6 +202,14 @@ class XBMCMD(cmd.Cmd):
             log.error("You must pass a valid movie_id or a (prefix of a) movie title")
             return
         XBMCMD.check_result(self.send_request("play", [movie_id]))
+
+    def do_remove(self, line):
+        """Removes the movie requested from the DB (not disk)"""
+        movie_id = self.get_id(line)
+        if movie_id is None:
+            log.error("You must pass a valid movie_id or a (prefix of a) movie title")
+            return
+        XBMCMD.check_result(self.send_request("remove", [movie_id]))
 
     def do_movies(self, line):
         """List all movies (no arguments)"""
@@ -202,6 +241,15 @@ class XBMCMD(cmd.Cmd):
 
         for video in details["streamdetails"]["video"]:
             print(line_format % ("Ratio", "%sx%s" % (video["width"], video["height"])))
+
+    def do_setTrailer(self, line):
+        """Sets the movie's trailer to the one specified. Usage: setTrailer Title (Year) http://new.trailer.com/url.mp4"""
+        movie_id, url = self.parse_line(line)
+        if movie_id is None or url is None:
+            log.error("You must pass a valid movie_id or a full movie title and year, and the trailer URL")
+            return
+        XBMCMD.check_result(self.send_request("setTrailer", [movie_id, url]))
+
 
 
 if __name__ == '__main__':
